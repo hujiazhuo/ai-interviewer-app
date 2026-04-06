@@ -9,16 +9,16 @@
       <text class="date">{{ currentDate }}</text>
     </view>
 
-    <!-- 岗位选择区域 -->
+    <!-- 文字面试入口 -->
     <view class="section-title">
-      <text>选择面试岗位</text>
+      <text>文字面试</text>
     </view>
 
     <view class="position-grid">
       <view
         class="position-card"
-        :class="{ selected: selectedPosition === 'backend' }"
-        @click="selectPosition('backend')"
+        :class="{ selected: selectedPosition === 'backend' && interviewMode === 'text' }"
+        @click="selectPosition('backend', 'text')"
       >
         <view class="card-icon">⚙️</view>
         <text class="card-title">后端工程师</text>
@@ -32,8 +32,8 @@
 
       <view
         class="position-card"
-        :class="{ selected: selectedPosition === 'algorithm' }"
-        @click="selectPosition('algorithm')"
+        :class="{ selected: selectedPosition === 'algorithm' && interviewMode === 'text' }"
+        @click="selectPosition('algorithm', 'text')"
       >
         <view class="card-icon">🧮</view>
         <text class="card-title">大模型应用开发</text>
@@ -47,8 +47,8 @@
 
       <view
         class="position-card"
-        :class="{ selected: selectedPosition === 'network' }"
-        @click="selectPosition('network')"
+        :class="{ selected: selectedPosition === 'network' && interviewMode === 'text' }"
+        @click="selectPosition('network', 'text')"
       >
         <view class="card-icon">🌐</view>
         <text class="card-title">网络工程师</text>
@@ -61,17 +61,83 @@
       </view>
     </view>
 
-    <!-- 开始面试按钮 -->
+    <!-- 开始文字面试按钮 -->
     <view class="action-section">
       <button
-        class="start-btn"
-        :disabled="!selectedPosition || starting"
+        class="start-btn text-btn"
+        :disabled="!selectedPosition || interviewMode !== 'text' || starting"
         :loading="starting"
         @click="startInterview"
       >
-        {{ starting ? '准备中...' : '开始面试' }}
+        {{ starting ? '准备中...' : '开始文字面试' }}
       </button>
       <text class="tip">每次面试包含10道题目</text>
+    </view>
+
+    <!-- 语音面试入口 -->
+    <view class="section-title" style="margin-top: 60rpx;">
+      <text>🎤 语音面试（AI面试官语音提问）</text>
+    </view>
+
+    <view class="position-grid">
+      <view
+        class="position-card voice-card"
+        :class="{ selected: selectedPosition === 'backend' && interviewMode === 'voice' }"
+        @click="selectPosition('backend', 'voice')"
+      >
+        <view class="card-icon">🎤</view>
+        <text class="card-title">后端工程师</text>
+        <text class="card-desc">语音+表情分析</text>
+        <view class="card-tags">
+          <text class="tag voice-tag">Java</text>
+          <text class="tag voice-tag">Spring</text>
+          <text class="tag voice-tag">微服务</text>
+        </view>
+      </view>
+
+      <view
+        class="position-card voice-card"
+        :class="{ selected: selectedPosition === 'algorithm' && interviewMode === 'voice' }"
+        @click="selectPosition('algorithm', 'voice')"
+      >
+        <view class="card-icon">🎤</view>
+        <text class="card-title">大模型应用开发</text>
+        <text class="card-desc">语音+表情分析</text>
+        <view class="card-tags">
+          <text class="tag voice-tag">LangChain</text>
+          <text class="tag voice-tag">RAG</text>
+          <text class="tag voice-tag">LLM</text>
+        </view>
+      </view>
+
+      <view
+        class="position-card voice-card"
+        :class="{ selected: selectedPosition === 'network' && interviewMode === 'voice' }"
+        @click="selectPosition('network', 'voice')"
+      >
+        <view class="card-icon">🎤</view>
+        <text class="card-title">网络工程师</text>
+        <text class="card-desc">语音+表情分析</text>
+        <view class="card-tags">
+          <text class="tag voice-tag">TCP/IP</text>
+          <text class="tag voice-tag">网络安全</text>
+          <text class="tag voice-tag">Linux</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 开始语音面试按钮 -->
+    <view class="action-section" style="margin-top: 30rpx;">
+      <button
+        class="start-btn voice-btn"
+        :disabled="!selectedPosition || interviewMode !== 'voice' || starting"
+        :loading="starting"
+        @click="startVoiceInterview(selectedPosition)"
+      >
+        {{ starting ? '准备中...' : '🎤 开始语音面试' }}
+      </button>
+      <text class="tip">AI面试官语音提问+表情分析</text>
+      <text class="switch-hint" @click="switchToText">点击临时改为文字输入</text>
     </view>
 
     <!-- 最近面试记录 -->
@@ -108,6 +174,7 @@ import { ref, computed, onMounted } from 'vue'
 import { api } from '@/common/api.js'
 
 const selectedPosition = ref('')
+const interviewMode = ref('text')  // 'text' | 'voice'
 const starting = ref(false)
 const recentInterviews = ref([])
 
@@ -139,25 +206,26 @@ const getPositionName = (position) => {
 const formatDate = (dateStr) => {
   if (!dateStr) return ''
   const date = new Date(dateStr)
-  return `${date.getMonth() + 1}/${date.getDate()}`
+  return `${date.getMonth() + 1}月${date.getDate()}日`
 }
 
-const selectPosition = (position) => {
+const selectPosition = (position, mode) => {
   selectedPosition.value = position
+  interviewMode.value = mode
 }
 
 const startInterview = async () => {
-  if (!selectedPosition.value) return
+  if (!selectedPosition.value || interviewMode.value !== 'text') return
 
   starting.value = true
   try {
     const res = await api.startInterview(selectedPosition.value)
     if (res.success) {
-      // 保存面试ID
       uni.setStorageSync('currentInterviewId', res.interview_id)
       uni.setStorageSync('currentPosition', selectedPosition.value)
+      uni.setStorageSync('interviewMode', 'text')
 
-      // 跳转到面试页面
+      // 跳转到文字面试页面
       uni.navigateTo({
         url: `/pages/interview/interview?id=${res.interview_id}&opening=${encodeURIComponent(res.opening)}&firstQuestion=${encodeURIComponent(res.question)}&questionId=${res.question_id}&isPersonalized=${res.is_personalized || false}`
       })
@@ -167,6 +235,34 @@ const startInterview = async () => {
   } finally {
     starting.value = false
   }
+}
+
+const startVoiceInterview = async (position) => {
+  starting.value = true
+  try {
+    const res = await api.startVoiceInterview(position)
+    if (res.success) {
+      uni.setStorageSync('currentInterviewId', res.interview_id)
+      uni.setStorageSync('currentPosition', position)
+      uni.setStorageSync('interviewMode', 'voice')
+
+      // 跳转到语音面试页面
+      uni.navigateTo({
+        url: `/pages/interview/interview_voice?id=${res.interview_id}&opening=${encodeURIComponent(res.opening || '')}&openingAudioUrl=${encodeURIComponent(res.opening_audio_url || '')}&firstQuestion=${encodeURIComponent(res.question || '')}&questionId=${res.question_id || ''}&isPersonalized=${res.is_personalized || false}&questionAudioUrl=${encodeURIComponent(res.question_audio_url || '')}`
+      })
+    }
+  } catch (e) {
+    uni.showToast({ title: e.message || '启动失败', icon: 'none' })
+  } finally {
+    starting.value = false
+  }
+}
+
+const switchToText = () => {
+  // 切换到文字面试模式
+  interviewMode.value = 'text'
+  // 切换到文字面试区域
+  uni.pageScrollTo({ scrollTop: 0, duration: 300 })
 }
 
 const loadRecentInterviews = async () => {
@@ -312,6 +408,36 @@ onMounted(() => {
   background: rgba(102, 126, 234, 0.1);
   padding: 4rpx 12rpx;
   border-radius: 20rpx;
+}
+
+.voice-card {
+  background: linear-gradient(135deg, #fff 0%, #f0f7ff 100%);
+  border: 2rpx solid #48bb78;
+}
+
+.voice-card.selected {
+  border-color: #48bb78;
+  background: linear-gradient(135deg, rgba(72, 187, 120, 0.1), rgba(72, 187, 120, 0.05));
+}
+
+.voice-tag {
+  color: #48bb78;
+  background: rgba(72, 187, 120, 0.1);
+}
+
+.voice-btn {
+  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+}
+
+.switch-hint {
+  margin-top: 16rpx;
+  font-size: 24rpx;
+  color: #667eea;
+  text-decoration: underline;
+}
+
+.text-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
 .action-section {

@@ -1,6 +1,7 @@
 """
 面试服务 - 面试流程控制
 """
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from bson import ObjectId
@@ -8,6 +9,9 @@ import uuid
 import random
 
 from app.config import settings
+
+# 配置日志
+logger = logging.getLogger(__name__)
 from app.database import get_collection
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
@@ -16,6 +20,11 @@ from app.models.interview import (
     InterviewQuestion,
     InterviewStatus,
 )
+
+
+def clamp_score(score: float, min_val: float = 0.0, max_val: float = 10.0) -> float:
+    """将分数限制在指定范围内"""
+    return max(min_val, min(max_val, score))
 
 
 class InterviewService:
@@ -169,8 +178,11 @@ class InterviewService:
 
         # 判断当前是否进入个性化阶段（前5题基于简历）
         is_personalized_phase = question_count < 5
+        logger.debug(f"get_next_question: question_count={question_count}, is_personalized_phase={is_personalized_phase}")
 
         if is_personalized_phase:
+            resume_summary = InterviewService._get_user_resume_summary(user_id)
+            logger.debug(f"get_next_question: resume_summary长度={len(resume_summary) if resume_summary else 0}")
             # 个性化阶段（前5题）：用 LLM 基于简历生成项目追问
             resume_summary = InterviewService._get_user_resume_summary(user_id)
             personalized_q = None
@@ -216,6 +228,9 @@ class InterviewService:
                 is_generated = True
                 is_personalized = True
                 correct_answer = ""
+                logger.info(f"个性化问题生成成功: {question_text[:50]}...")
+            else:
+                logger.warning(f"个性化问题生成失败，将使用知识库")
 
         # 如果没有生成个性化问题（后5题），从知识库选
         if not question_text:
@@ -351,11 +366,23 @@ class InterviewService:
         # 生成点评（将标准答案作为上下文）
         context_text = f"标准答案：{correct_answer}" if correct_answer else ""
 
-        comment_result = llm_service.generate_comment(
-            question=current_question.question,
-            answer=answer,
-            context=context_text,
-        )
+        try:
+            comment_result = llm_service.generate_comment(
+                question=current_question.question,
+                answer=answer,
+                context=context_text,
+            )
+        except Exception as e:
+            logger.error(f"生成点评失败: {e}", exc_info=True)
+            # 使用默认评分
+            comment_result = {
+                "comment": "点评生成失败，请稍后重试。",
+                "technical": 5.0,
+                "communication": 5.0,
+                "problem_solving": 5.0,
+                "experience": 5.0,
+                "logical_thinking": 5.0,
+            }
 
         # 更新面试记录中的回答和点评
         interviews = get_collection("interviews")
@@ -368,11 +395,11 @@ class InterviewService:
                 "$set": {
                     "questions.$.answer": answer,
                     "questions.$.comment": comment_result["comment"],
-                    "questions.$.technical": comment_result.get("technical", 5.0),
-                    "questions.$.communication": comment_result.get("communication", 5.0),
-                    "questions.$.problem_solving": comment_result.get("problem_solving", 5.0),
-                    "questions.$.experience": comment_result.get("experience", 5.0),
-                    "questions.$.logical_thinking": comment_result.get("logical_thinking", 5.0),
+                    "questions.$.technical": clamp_score(comment_result.get("technical", 5.0)),
+                    "questions.$.communication": clamp_score(comment_result.get("communication", 5.0)),
+                    "questions.$.problem_solving": clamp_score(comment_result.get("problem_solving", 5.0)),
+                    "questions.$.experience": clamp_score(comment_result.get("experience", 5.0)),
+                    "questions.$.logical_thinking": clamp_score(comment_result.get("logical_thinking", 5.0)),
                 }
             },
         )
@@ -380,17 +407,17 @@ class InterviewService:
         question_count = len(interview.questions)
         is_finished = question_count >= settings.MAX_QUESTIONS_PER_INTERVIEW
 
-        # 计算综合分数（5个维度的平均）
-        tech = comment_result.get("technical", 5.0)
-        comm = comment_result.get("communication", 5.0)
-        prob = comment_result.get("problem_solving", 5.0)
-        exp = comment_result.get("experience", 5.0)
-        logic = comment_result.get("logical_thinking", 5.0)
+        # 计算综合分数（5个维度的平均），确保在0-10范围内
+        tech = clamp_score(comment_result.get("technical", 5.0))
+        comm = clamp_score(comment_result.get("communication", 5.0))
+        prob = clamp_score(comment_result.get("problem_solving", 5.0))
+        exp = clamp_score(comment_result.get("experience", 5.0))
+        logic = clamp_score(comment_result.get("logical_thinking", 5.0))
         avg_score = (tech + comm + prob + exp + logic) / 5
 
         return {
             "comment": comment_result["comment"],
-            "score": avg_score,
+            "score": clamp_score(avg_score),
             "technical": tech,
             "communication": comm,
             "problem_solving": prob,
@@ -402,8 +429,14 @@ class InterviewService:
         }
 
     @staticmethod
-    def end_interview(interview_id: str, user_id: str) -> Dict[str, Any]:
-        """结束面试并计算总分"""
+    def end_interview(interview_id: str, user_id: str, nervousness_history: list = None) -> Dict[str, Any]:
+        """结束面试并计算总分
+
+        Args:
+            interview_id: 面试ID
+            user_id: 用户ID
+            nervousness_history: 紧张度历史记录列表，每条格式 {"nervousness": 0-100, "timestamp": ...}
+        """
         interview = InterviewService.get_interview(interview_id)
         if not interview:
             return {"error": "面试不存在"}
@@ -413,6 +446,23 @@ class InterviewService:
 
         if interview.status == InterviewStatus.COMPLETED:
             return {"error": "面试已结束"}
+
+        # 如果没有传入紧张度历史，从MongoDB获取
+        if not nervousness_history:
+            nervousness_history = getattr(interview, 'nervousness_history', []) or []
+
+        # 计算紧张度影响分数
+        nervousness_penalty = 0.0
+        avg_nervousness = 0.0
+        if nervousness_history and len(nervousness_history) > 0:
+            # 计算平均紧张度
+            total_nervousness = sum(h.get("nervousness", 0) for h in nervousness_history)
+            avg_nervousness = total_nervousness / len(nervousness_history)
+            # 紧张度 > 60 扣分，< 40 加分，范围 [-1.5, +0.5]
+            if avg_nervousness > 60:
+                nervousness_penalty = -((avg_nervousness - 60) / 40) * 1.5  # 最多扣1.5分
+            elif avg_nervousness < 40:
+                nervousness_penalty = ((40 - avg_nervousness) / 40) * 0.5  # 最多加0.5分
 
         # 计算总分（5个维度的平均分）
         total_score = 0.0
@@ -424,34 +474,29 @@ class InterviewService:
             "logical_thinking": 0.0,
         }
 
-        scored_questions = [q for q in interview.questions if q.technical is not None or q.score is not None]
+        scored_questions = [q for q in interview.questions if q.technical is not None]
 
         if scored_questions:
             n = len(scored_questions)
 
             # 每个维度独立计算平均分
             for q in scored_questions:
-                # 如果有独立维度分数就用，没有就用总分 fallback
-                if q.technical is not None:
-                    dimension_scores["technical"] += q.technical
-                    dimension_scores["communication"] += getattr(q, 'communication', q.technical)
-                    dimension_scores["problem_solving"] += getattr(q, 'problem_solving', q.technical)
-                    dimension_scores["experience"] += getattr(q, 'experience', q.technical)
-                    dimension_scores["logical_thinking"] += getattr(q, 'logical_thinking', q.technical)
-                elif q.score is not None:
-                    # fallback: 用总分作为所有维度
-                    dimension_scores["technical"] += q.score
-                    dimension_scores["communication"] += q.score
-                    dimension_scores["problem_solving"] += q.score
-                    dimension_scores["experience"] += q.score
-                    dimension_scores["logical_thinking"] += q.score
+                # 使用各维度独立分数，如果某维度缺失则用 technical 作为 fallback
+                dimension_scores["technical"] += q.technical
+                dimension_scores["communication"] += getattr(q, 'communication', q.technical)
+                dimension_scores["problem_solving"] += getattr(q, 'problem_solving', q.technical)
+                dimension_scores["experience"] += getattr(q, 'experience', q.technical)
+                dimension_scores["logical_thinking"] += getattr(q, 'logical_thinking', q.technical)
 
             # 除以题目数量，归一化到 0-10
             for key in dimension_scores:
                 dimension_scores[key] = min(dimension_scores[key] / n, 10.0)
 
-            # 总分 = 5个维度的平均值
-            total_score = sum(dimension_scores.values()) / 5
+            # 应用紧张度惩罚到沟通表达维度
+            dimension_scores["communication"] = max(0, min(10.0, dimension_scores["communication"] + nervousness_penalty))
+
+            # 总分 = 5个维度的平均值（确保在0-10范围内）
+            total_score = clamp_score(sum(dimension_scores.values()) / 5)
 
         # 更新面试状态
         interviews = get_collection("interviews")
@@ -462,6 +507,7 @@ class InterviewService:
                     "status": InterviewStatus.COMPLETED.value,
                     "total_score": total_score,
                     "ended_at": datetime.utcnow(),
+                    "nervousness_history": nervousness_history or [],
                 }
             },
         )
@@ -474,6 +520,8 @@ class InterviewService:
             "position": interview.position,
             "total_score": total_score,
             "dimension_scores": dimension_scores,
+            "nervousness_penalty": nervousness_penalty,
+            "avg_nervousness": avg_nervousness,
             "created_at": datetime.utcnow(),
         })
 
@@ -593,7 +641,7 @@ class InterviewService:
             )
 
             if is_added:
-                print(f"知识库已添加新问题: {q.question[:50]}...")
+                logger.info(f"知识库已添加新问题: {q.question[:50]}...")
 
     @staticmethod
     def delete_interview(interview_id: str, user_id: str) -> bool:
@@ -628,5 +676,5 @@ class InterviewService:
 
             return True
         except Exception as e:
-            print(f"删除面试失败: {e}")
+            logger.error(f"删除面试失败: {e}", exc_info=True)
             return False

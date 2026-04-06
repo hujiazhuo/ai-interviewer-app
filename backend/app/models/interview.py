@@ -34,9 +34,11 @@ class InterviewModel(BaseModel):
     id: Optional[str] = Field(default=None, alias="_id")
     user_id: str
     position: str  # frontend/backend/algorithm
+    mode: str = "text"  # text | voice
     status: InterviewStatus = InterviewStatus.IN_PROGRESS
     questions: List[InterviewQuestion] = []
     total_score: Optional[float] = None
+    nervousness_history: List[dict] = []  # 紧张度历史记录
     started_at: datetime = Field(default_factory=datetime.utcnow)
     ended_at: Optional[datetime] = None
 

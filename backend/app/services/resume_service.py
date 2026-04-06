@@ -1,6 +1,7 @@
 """
 简历服务
 """
+import logging
 import os
 import uuid
 import re
@@ -13,6 +14,8 @@ from docx import Document
 from app.config import settings
 from app.database import get_collection
 from app.models.resume import ResumeModel, ResumeResponse
+
+logger = logging.getLogger(__name__)
 
 
 class ResumeParser:
@@ -115,7 +118,7 @@ class ResumeService:
                 text += page.get_text()
             doc.close()
         except Exception as e:
-            print(f"PDF解析错误: {e}")
+            logger.error(f"PDF解析错误: {e}")
         return text
 
     @staticmethod
@@ -127,7 +130,7 @@ class ResumeService:
             for para in doc.paragraphs:
                 text += para.text + "\n"
         except Exception as e:
-            print(f"DOCX解析错误: {e}")
+            logger.error(f"DOCX解析错误: {e}")
         return text
 
     @staticmethod
@@ -137,7 +140,7 @@ class ResumeService:
             with open(file_path, "r", encoding="utf-8") as f:
                 return f.read()
         except Exception as e:
-            print(f"TXT解析错误: {e}")
+            logger.error(f"TXT解析错误: {e}")
         return ""
 
     @staticmethod

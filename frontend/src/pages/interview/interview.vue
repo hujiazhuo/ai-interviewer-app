@@ -9,6 +9,9 @@
       <view class="progress-track">
         <view class="progress-fill" :style="{ width: (currentQuestion / 10 * 100) + '%' }"></view>
       </view>
+      <view class="end-btn" @click="confirmEndInterview" v-if="!showResult">
+        <text>结束面试</text>
+      </view>
     </view>
 
     <!-- 面试官头像 -->
@@ -66,7 +69,7 @@
               <text class="answer-text">{{ item.correctAnswer }}</text>
             </view>
             <view class="score-badge" v-if="item.score">
-              <text>得分：{{ item.score.toFixed(1) }}</text>
+              <text>得分：{{ item.score.toFixed(1) }}/10</text>
             </view>
           </view>
         </view>
@@ -111,15 +114,15 @@
         <text class="result-title">面试完成</text>
         <view class="result-score">
           <text class="score-value">{{ finalScore?.toFixed(1) || '--' }}</text>
-          <text class="score-label">综合得分</text>
+          <text class="score-label">综合得分（满分10分）</text>
         </view>
         <view class="result-dimensions">
           <view class="dimension-item" v-for="(value, key) in dimensionScores" :key="key">
             <text class="dim-name">{{ getDimensionName(key) }}</text>
             <view class="dim-bar">
-              <view class="dim-fill" :style="{ width: value + '%' }"></view>
+              <view class="dim-fill" :style="{ width: (value * 10) + '%' }"></view>
             </view>
-            <text class="dim-value">{{ value.toFixed(1) }}</text>
+            <text class="dim-value">{{ value.toFixed(1) }}/10</text>
           </view>
         </view>
         <button class="back-btn" @click="backToHome">
@@ -273,6 +276,21 @@ const endInterview = async () => {
   }
 }
 
+const confirmEndInterview = () => {
+  uni.showModal({
+    title: '确认结束面试',
+    content: '你确定要退出此次面试吗？面试结果将会保存。',
+    confirmText: '确定结束',
+    cancelText: '继续面试',
+    success: async (res) => {
+      if (res.confirm) {
+        isFinished.value = true
+        await endInterview()
+      }
+    }
+  })
+}
+
 const viewResult = () => {
   showResult.value = true
 }
@@ -336,12 +354,16 @@ onMounted(() => {
   position: sticky;
   top: 0;
   z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .progress-info {
   display: flex;
   justify-content: space-between;
   margin-bottom: 16rpx;
+  flex: 1;
 }
 
 .position-name {
@@ -359,6 +381,16 @@ onMounted(() => {
   height: 8rpx;
   background: #eee;
   border-radius: 4rpx;
+  flex: 1;
+  margin-right: 20rpx;
+}
+
+.end-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  padding: 8rpx 24rpx;
+  border-radius: 20rpx;
+  font-size: 24rpx;
 }
 
 .progress-fill {

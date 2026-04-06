@@ -1,6 +1,7 @@
 """
 RAG知识库服务 - 基于Sentence-Transformer Embedding检索
 """
+import logging
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import re
@@ -10,6 +11,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from app.config import settings
 from app.database import get_collection
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -214,7 +217,7 @@ class RAGService:
             return results[:top_k]
 
         except Exception as e:
-            print(f"Retrieval error: {e}")
+            logger.error(f"Retrieval error: {e}")
             return []
 
     def check_similarity(

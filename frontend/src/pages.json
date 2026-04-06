@@ -30,6 +30,13 @@
       }
     },
     {
+      "path": "pages/interview/interview_voice",
+      "style": {
+        "navigationBarTitleText": "语音面试",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/score/score",
       "style": {
         "navigationBarTitleText": "能力评估",

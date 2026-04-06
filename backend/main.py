@@ -12,6 +12,7 @@ from app.api import (
     auth_router,
     resume_router,
     interview_router,
+    interview_voice_router,
     score_router,
     knowledge_router,
     project_router,
@@ -53,10 +54,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 配置CORS
+# 配置CORS - 生产环境应限制来源
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",  # 开发环境
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    # 小程序环境
+    "http://servicewechat.com",
+    "wx://servicewechat.com",
+]
+if settings.DEBUG:
+    # 开发环境允许所有来源
+    ALLOWED_ORIGINS.append("*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应该限制
+    allow_origins=ALLOWED_ORIGINS if "*" not in ALLOWED_ORIGINS else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,6 +80,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(resume_router)
 app.include_router(interview_router)
+app.include_router(interview_voice_router)
 app.include_router(score_router)
 app.include_router(knowledge_router)
 app.include_router(project_router)

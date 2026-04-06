@@ -1,11 +1,14 @@
 """
 DeepSeek LLM 服务
 """
+import logging
 from typing import Optional, List, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMService:
@@ -145,12 +148,14 @@ class LLMService:
 
         try:
             result = self.chat(messages, temperature=0.7)
+            logger.debug(f"generate_personalized_question LLM返回: {result}")
             # 如果返回的内容太短或像是拒绝，说明生成失败
             if not result or len(result) < 10 or "无法" in result or "没有" in result[:20]:
+                logger.debug(f"个性化问题生成被拒绝，原因: 返回为空或包含拒绝语句")
                 return None
             return result
         except Exception as e:
-            print(f"生成个性化问题失败: {e}")
+            logger.error(f"生成个性化问题失败: {e}")
             return None
 
     def generate_comment(

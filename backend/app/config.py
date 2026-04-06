@@ -44,6 +44,20 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
 
+    # STT配置 (语音转文字)
+    STT_MODEL_SIZE: str = "base"  # tiny/base/small/medium/large
+    STT_DEVICE: str = "cpu"  # cpu/cuda
+
+    # TTS配置 (文字转语音)
+    TTS_VOICE: str = "zh-CN-XiaoxiaoNeural"  # 默认女声(晓晓)
+
+    # 表情分析配置
+    EMOTION_DETECTOR: str = "retinaface"  #  retinaface/ssd/mtcnn
+    EMOTION_MODEL: str = "Facenet512"  # VGG-Face/Facenet/Facenet512/DeepFace
+
+    # WebSocket配置
+    VOICE_SESSION_TIMEOUT: int = 300  # 5分钟
+
     class Config:
         env_file = ".env"
         extra = "allow"

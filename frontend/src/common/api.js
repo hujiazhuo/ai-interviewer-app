@@ -195,7 +195,70 @@ export const api = {
   getPositionAvg: () => request({
     url: '/api/score/position-avg',
     method: 'GET'
-  })
+  }),
+
+  // ========== 语音面试相关 ==========
+  startVoiceInterview: (position) => request({
+    url: '/api/interview/voice/start',
+    method: 'POST',
+    data: { position }
+  }),
+
+  getNextVoiceQuestion: (interviewId) => request({
+    url: `/api/interview/voice/${interviewId}/next-question`,
+    method: 'POST'
+  }),
+
+  uploadVoice: (interviewId, filePath) => {
+    return new Promise((resolve, reject) => {
+      const token = getToken()
+      uni.uploadFile({
+        url: BASE_URL + `/api/interview/voice/upload/${interviewId}`,
+        filePath,
+        name: 'file',
+        header: {
+          'Authorization': `Bearer ${token}`
+        },
+        success: (res) => {
+          if (res.statusCode === 200) {
+            resolve(JSON.parse(res.data))
+          } else {
+            reject(new Error('上传失败'))
+          }
+        },
+        fail: reject
+      })
+    })
+  },
+
+  analyzeEmotion: (filePath, interviewId) => {
+    return new Promise((resolve, reject) => {
+      const token = getToken()
+      const url = interviewId
+        ? BASE_URL + '/api/interview/voice/analyze_emotion?interview_id=' + interviewId
+        : BASE_URL + '/api/interview/voice/analyze_emotion'
+      uni.uploadFile({
+        url,
+        filePath,
+        name: 'file',
+        header: {
+          'Authorization': `Bearer ${token}`
+        },
+        success: (res) => {
+          if (res.statusCode === 200) {
+            resolve(JSON.parse(res.data))
+          } else {
+            reject(new Error('表情分析失败'))
+          }
+        },
+        fail: reject
+      })
+    })
+  },
+
+  getVoiceAudio: (audioId) => {
+    return BASE_URL + `/api/interview/voice/audio/${audioId}`
+  }
 }
 
 export default api

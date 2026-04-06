@@ -123,14 +123,25 @@ npm run dev:h5
 
 ## 启动问题反思
 
-### 本次启动耗时过长的原因
+### 正确的启动流程
 
-1. **模块路径错误**：错误地使用 `uvicorn app.main:app`，但入口文件是 `backend/main.py`，正确路径是 `main:app`
-2. **工作目录问题**：未正确 `cd` 到 `backend` 目录，导致找不到 `main` 模块
-3. **端口混淆**：之前用过的端口（8000、34570、34421）都是旧的，正确端口是 **3000**
+```bash
+# 1. 先检查服务是否已运行
+curl http://localhost:3000/health
 
-### 关键教训
+# 2. 如果需要重启，再按以下步骤
+conda activate ai-interviewer
+cd d:/hjz/cv/AI-Interviewer-pro/backend
+uvicorn main:app --host 0.0.0.0 --port 3000
+```
 
-- FastAPI 项目的入口模块路径取决于 `main.py` 的位置，而不是 `app/` 目录
-- 必须先确认当前工作目录，或使用绝对路径
-- 启动前应检查 `main.py` 确认正确的模块引用方式
+### 核心教训
+
+**先读文档，先验证状态，再动手操作！**
+
+1. **先检查再动手**：服务可能已经在运行了，先 `curl http://localhost:3000/health` 验证状态，不要盲目重启
+2. **严格按照 README 步骤**：用户说"看文档"就要真的按文档步骤执行，不要自己想当然
+3. **conda 环境**：必须先激活 conda 环境 `conda activate ai-interviewer`，不要跳过这一步
+4. **工作目录**：必须先 `cd` 到 `backend` 目录，再启动服务
+5. **模块路径**：`main:app` 是相对于 backend 目录的路径，不是 `app.main:app`
+6. **端口正确**：本项目端口是 **3000**，不是 8000 或其他端口

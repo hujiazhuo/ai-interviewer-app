@@ -32,3 +32,14 @@ numpy>=1.26.0
 
 # 其他
 python-dotenv>=1.0.0
+
+# 语音处理
+faster-whisper>=0.10.0
+edge-tts>=6.1.0
+
+# 表情分析
+deepface>=0.0.81
+opencv-python>=4.9.0
+
+# WebSocket
+websockets>=12.0
