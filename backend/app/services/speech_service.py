@@ -5,13 +5,18 @@
 """
 import asyncio
 import logging
-import tempfile
 import os
 import uuid
 from typing import Optional, AsyncGenerator
-from functools import lru_cache
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# 持久化音频存储目录（Sealos DevBox 容器重启后不会丢失）
+PERSISTENT_AUDIO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "audio_files")
+os.makedirs(PERSISTENT_AUDIO_DIR, exist_ok=True)
+logger.info(f"音频存储目录: {PERSISTENT_AUDIO_DIR}")
 
 
 class SpeechService:
@@ -28,18 +33,47 @@ class SpeechService:
         if not self._stt_initialized:
             try:
                 from faster_whisper import WhisperModel
-                # 使用base模型平衡速度和准确率
-                # 可选: tiny, base, small, medium, large
+
+                # 优先加载本地缓存快照，离线环境避免联网拉取模型失败
+                model_source = self._resolve_stt_model_source()
                 self.stt_model = WhisperModel(
-                    "base",
-                    device="cpu",
+                    model_source,
+                    device=settings.STT_DEVICE,
                     compute_type="int8"
                 )
                 self._stt_initialized = True
-                logger.info("STT模型加载完成 (base, CPU)")
+                logger.info(f"STT模型加载完成: source={model_source}, device={settings.STT_DEVICE}")
             except Exception as e:
                 logger.error(f"STT模型加载失败: {e}")
                 self.stt_model = None
+
+    def _resolve_stt_model_source(self) -> str:
+        """解析STT模型来源：优先本地快照，其次模型名"""
+        cache_root = settings.HUGGINGFACE_HUB_CACHE_DIR
+        repo_id = f"Systran/faster-whisper-{settings.STT_MODEL_SIZE}"
+        repo_dir = os.path.join(cache_root, f"models--{repo_id.replace('/', '--')}")
+
+        refs_main = os.path.join(repo_dir, "refs", "main")
+        if os.path.isfile(refs_main):
+            with open(refs_main, "r", encoding="utf-8") as f:
+                snapshot_id = f.read().strip()
+            snapshot_dir = os.path.join(repo_dir, "snapshots", snapshot_id)
+            if os.path.isdir(snapshot_dir):
+                return snapshot_dir
+
+        snapshots_dir = os.path.join(repo_dir, "snapshots")
+        if os.path.isdir(snapshots_dir):
+            candidates = [
+                os.path.join(snapshots_dir, d)
+                for d in os.listdir(snapshots_dir)
+                if os.path.isdir(os.path.join(snapshots_dir, d))
+            ]
+            if candidates:
+                candidates.sort(key=os.path.getmtime, reverse=True)
+                return candidates[0]
+
+        # 找不到本地缓存时回退到模型名（可能触发下载）
+        return settings.STT_MODEL_SIZE
 
     async def transcribe_audio(self, audio_path: str) -> str:
         """
@@ -54,25 +88,50 @@ class SpeechService:
         self._init_stt()
 
         if self.stt_model is None:
+            logger.error("STT模型未加载")
             return ""
 
-        # faster-whisper 是同步的，在线程池中运行
-        loop = asyncio.get_event_loop()
+        if not os.path.exists(audio_path):
+            logger.error(f"音频文件不存在: {audio_path}")
+            return ""
 
-        def _transcribe():
+        file_size = os.path.getsize(audio_path)
+        if file_size <= 0:
+            logger.error(f"音频文件为空: {audio_path}")
+            return ""
+
+        logger.info(f"开始STT转写，文件: {audio_path}, 大小: {file_size} bytes")
+
+        # faster-whisper 是同步的，在线程池中运行
+        loop = asyncio.get_running_loop()
+
+        def _transcribe(vad_filter: bool, beam_size: int) -> str:
             segments, _ = self.stt_model.transcribe(
                 audio_path,
                 language="zh",
-                vad_filter=True,  # 语音活动检测，过滤静音
-                beam_size=5,
+                vad_filter=vad_filter,
+                beam_size=beam_size,
             )
-            return "".join([seg.text for seg in segments])
+            return "".join(seg.text for seg in segments).strip()
 
         try:
-            text = await loop.run_in_executor(None, _transcribe)
-            return text.strip()
+            # 首次尝试：开启VAD，适合常规语音
+            text = await loop.run_in_executor(None, lambda: _transcribe(True, 5))
+            if text:
+                logger.info(f"STT转写结果: '{text}'")
+                return text
+
+            # 降级重试：关闭VAD，避免短音频或低音量被过滤
+            logger.warning("STT首次结果为空，使用无VAD模式重试")
+            text = await loop.run_in_executor(None, lambda: _transcribe(False, 1))
+            if text:
+                logger.info(f"STT降级重试成功: '{text}'")
+                return text
+
+            logger.warning("STT转写结果为空")
+            return ""
         except Exception as e:
-            logger.error(f"STT转写失败: {e}")
+            logger.error(f"STT转写异常: {e}")
             return ""
 
     async def text_to_speech(self, text: str, output_path: Optional[str] = None, voice: Optional[str] = None) -> str:
@@ -89,8 +148,8 @@ class SpeechService:
         """
         if output_path is None:
             suffix = ".mp3"
-            temp_dir = tempfile.gettempdir()
-            output_path = os.path.join(temp_dir, f"tts_{uuid.uuid4()}{suffix}")
+            # 使用持久化存储目录，替代 /tmp（容器重启后会丢失）
+            output_path = os.path.join(PERSISTENT_AUDIO_DIR, f"tts_{uuid.uuid4()}{suffix}")
 
         voice = voice or self.default_voice
 

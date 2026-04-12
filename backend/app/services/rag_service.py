@@ -2,25 +2,92 @@
 RAG知识库服务 - 基于Sentence-Transformer Embedding检索
 """
 import logging
+import os
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
 import re
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from app.config import settings
 from app.database import get_collection
 
+# 需在 sentence_transformers 导入前设置，才能让 huggingface_hub 使用镜像
+os.environ.setdefault("HF_ENDPOINT", settings.HUGGINGFACE_ENDPOINT)
+from sentence_transformers import SentenceTransformer
+
 logger = logging.getLogger(__name__)
 
 
 class RAGService:
+    def _resolve_model_from_hub_cache(self, model_id: str) -> Optional[str]:
+        cache_root = settings.HUGGINGFACE_HUB_CACHE_DIR
+        repo_dir = os.path.join(cache_root, f"models--{model_id.replace('/', '--')}")
+        if not os.path.isdir(repo_dir):
+            return None
+
+        refs_main = os.path.join(repo_dir, "refs", "main")
+        if os.path.isfile(refs_main):
+            with open(refs_main, "r", encoding="utf-8") as f:
+                snapshot_id = f.read().strip()
+            snapshot_dir = os.path.join(repo_dir, "snapshots", snapshot_id)
+            if os.path.isdir(snapshot_dir):
+                return snapshot_dir
+
+        snapshots_dir = os.path.join(repo_dir, "snapshots")
+        if not os.path.isdir(snapshots_dir):
+            return None
+
+        candidates = [
+            os.path.join(snapshots_dir, d)
+            for d in os.listdir(snapshots_dir)
+            if os.path.isdir(os.path.join(snapshots_dir, d))
+        ]
+        if not candidates:
+            return None
+
+        candidates.sort(key=os.path.getmtime, reverse=True)
+        return candidates[0]
+
     def __init__(self):
-        self.model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        local_model_dir = settings.HUGGINGFACE_MODEL_LOCAL_DIR
+        model_source = settings.HUGGINGFACE_EMBEDDING_MODEL
+        hub_snapshot_dir = self._resolve_model_from_hub_cache(model_source)
+
+        if os.path.isdir(local_model_dir):
+            logger.info(f"Using local embedding model from {local_model_dir}")
+            model_source = local_model_dir
+        elif hub_snapshot_dir:
+            logger.info(f"Using hub cache embedding model from {hub_snapshot_dir}")
+            model_source = hub_snapshot_dir
+        elif settings.HUGGINGFACE_LOCAL_ONLY:
+            raise RuntimeError(
+                "Local-only mode enabled, but no local model found in configured paths"
+            )
+
+        try:
+            self.model = SentenceTransformer(
+                model_source,
+                local_files_only=settings.HUGGINGFACE_LOCAL_ONLY,
+            )
+        except Exception as e:
+            logger.warning(f"Embedding model load failed, fallback to keyword retrieval: {e}")
+            self.model = None
+
         self.documents_cache = []  # 缓存所有文档
         self.documents_embeddings = []  # 缓存所有文档的embedding
         self.cache_initialized = False
+
+    def _keyword_similarity(self, text1: str, text2: str) -> float:
+        """简单关键词相似度，作为离线兜底策略"""
+        tokens1 = set(re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", text1.lower()))
+        tokens2 = set(re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", text2.lower()))
+
+        if not tokens1 or not tokens2:
+            return 0.0
+
+        overlap = len(tokens1 & tokens2)
+        return overlap / max(len(tokens1), len(tokens2))
 
     def parse_md_to_documents(self, md_content: str, position: str) -> List[Dict[str, Any]]:
         """
@@ -148,8 +215,8 @@ class RAGService:
             self.documents_cache.append(doc_data)
             texts.append(f"{doc_data['question']} {doc_data['answer']}")
 
-        # 批量计算所有文档的embedding
-        if texts:
+        # 批量计算所有文档的embedding（模型不可用时走关键词兜底）
+        if texts and self.model is not None:
             self.documents_embeddings = self.model.encode(texts, convert_to_numpy=True)
         else:
             self.documents_embeddings = np.array([])
@@ -190,6 +257,22 @@ class RAGService:
         filtered_indices = [i for i, d in enumerate(self.documents_cache) if position is None or d.get("position") == position]
 
         try:
+            if self.model is None or self.documents_embeddings.size == 0:
+                fallback_results = []
+                for doc in docs:
+                    score = self._keyword_similarity(query, f"{doc['question']} {doc['answer']}")
+                    if score > 0.05:
+                        fallback_results.append({
+                            "question": doc["question"],
+                            "answer": doc["answer"],
+                            "tags": doc.get("tags", []),
+                            "position": doc.get("position", ""),
+                            "score": float(score),
+                            "id": doc.get("id"),
+                        })
+                fallback_results.sort(key=lambda x: x["score"], reverse=True)
+                return fallback_results[:top_k]
+
             # 计算query的embedding
             query_emb = self.model.encode([query], convert_to_numpy=True)
 
@@ -230,6 +313,10 @@ class RAGService:
         检查两个问题的相似度（基于Embedding）
         """
         try:
+            if self.model is None:
+                similarity = self._keyword_similarity(question1, question2)
+                return similarity >= threshold, float(similarity)
+
             emb = self.model.encode([question1, question2], convert_to_numpy=True)
             similarity = cosine_similarity([emb[0]], [emb[1]])[0][0]
             return similarity >= threshold, float(similarity)

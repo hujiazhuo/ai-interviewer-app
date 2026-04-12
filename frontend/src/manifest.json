@@ -38,15 +38,7 @@
             "minified" : true
         },
         "usingComponents" : true,
-        "permission" : {
-            "scope.camera" : {
-                "desc" : "用于分析面试表情，判断紧张程度"
-            },
-            "scope.record" : {
-                "desc" : "用于语音面试，录制您的回答"
-            }
-        },
-        "requiredPrivateInfos" : ["camera", "record"]
+        "lazyCodeLoading": "requiredComponents"
     },
     "mp-alipay" : {
         "usingComponents" : true
@@ -72,7 +64,7 @@
             "https" : false,
             "proxy" : {
                 "/api" : {
-                    "target" : "http://localhost:8000",
+                    "target" : "http://localhost:3000",
                     "changeOrigin" : true
                 }
             }

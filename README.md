@@ -38,7 +38,19 @@ AI-Interviewer-pro/
 
 ## 快速启动
 
-### 后端启动方法
+### 启动前检查（建议先做）
+
+```bash
+# 1) 检查后端是否已运行
+curl http://localhost:3000/health
+
+# 2) 检查前端端口是否已占用（Windows PowerShell）
+Get-NetTCPConnection -LocalPort 8080 -State Listen
+```
+
+如果后端返回 healthy，或前端端口已监听，说明服务可能已经在运行，不要重复启动。
+
+### 后端启动方法（FastAPI）
 
 ```bash
 # 1. 激活conda环境
@@ -49,6 +61,13 @@ cd d:/hjz/cv/AI-Interviewer-pro/backend
 
 # 3. 启动服务
 uvicorn main:app --host 0.0.0.0 --port 3000
+```
+
+如果在 Windows 终端里出现“uvicorn 不是内部或外部命令”，可使用下面的兜底命令（等价启动）：
+
+```bash
+cd d:/hjz/cv/AI-Interviewer-pro/backend
+conda run -n ai-interviewer python -m uvicorn main:app --host 0.0.0.0 --port 3000
 ```
 
 **关键说明**：
@@ -64,6 +83,15 @@ npm run dev:h5
 ```
 
 访问 http://localhost:8080
+
+### 前端连接后端配置（本地开发必看）
+
+当前项目本地开发应使用后端 3000 端口：
+
+- `frontend/src/common/api.js` 中 `BASE_URL` 应为 `http://localhost:3000`
+- `frontend/src/manifest.json` 中 `/api` 代理 `target` 应为 `http://localhost:3000`
+
+若这里仍是线上域名或 8000 端口，前端会表现为“页面能打开但登录失败/后端无效”。
 
 ## API接口
 
@@ -126,22 +154,32 @@ npm run dev:h5
 ### 正确的启动流程
 
 ```bash
-# 1. 先检查服务是否已运行
+# 1. 先检查服务是否已运行（不要盲目重启）
 curl http://localhost:3000/health
 
-# 2. 如果需要重启，再按以下步骤
+# 2. 如果后端没启动，再按以下步骤启动
 conda activate ai-interviewer
 cd d:/hjz/cv/AI-Interviewer-pro/backend
 uvicorn main:app --host 0.0.0.0 --port 3000
+
+# 3. 启动前端
+cd d:/hjz/cv/AI-Interviewer-pro/frontend
+npm run dev:h5
 ```
+
+### 为什么这次启动花了很久
+
+1. 先入为主地认为“服务没启动”，没有第一时间做健康检查，导致重复尝试。
+2. 前端 API 地址配置与本地后端不一致（线上域名/错误端口），表现为“前端打开但登录失败”，误导为后端故障。
+3. 终端环境差异导致 `conda activate` 后命令可见性不稳定，出现 `uvicorn` 命令不可用，需要用 `conda run -n ...` 兜底。
+4. 端口认知不一致：项目后端固定为 3000，而不是常见的 8000。
 
 ### 核心教训
 
 **先读文档，先验证状态，再动手操作！**
 
-1. **先检查再动手**：服务可能已经在运行了，先 `curl http://localhost:3000/health` 验证状态，不要盲目重启
-2. **严格按照 README 步骤**：用户说"看文档"就要真的按文档步骤执行，不要自己想当然
-3. **conda 环境**：必须先激活 conda 环境 `conda activate ai-interviewer`，不要跳过这一步
-4. **工作目录**：必须先 `cd` 到 `backend` 目录，再启动服务
-5. **模块路径**：`main:app` 是相对于 backend 目录的路径，不是 `app.main:app`
-6. **端口正确**：本项目端口是 **3000**，不是 8000 或其他端口
+1. **先检查再动手**：先看后端健康接口、前端端口监听状态，再决定是否重启。
+2. **严格按文档执行**：环境名、目录、模块路径、端口必须一致。
+3. **前后端配置要对齐**：前端 `BASE_URL` 与代理 `target` 必须指向本地后端 `http://localhost:3000`。
+4. **准备兜底启动命令**：当 `uvicorn` 不可见时，使用 `conda run -n ai-interviewer python -m uvicorn ...`。
+5. **统一端口认知**：后端 3000，前端 8080；先确认占用再操作。

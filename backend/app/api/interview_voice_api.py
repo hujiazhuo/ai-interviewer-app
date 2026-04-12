@@ -7,7 +7,6 @@ from fastapi.responses import FileResponse
 from typing import Optional, Dict
 import json
 import asyncio
-import tempfile
 import os
 import uuid
 import time
@@ -18,13 +17,16 @@ from app.models import InterviewCreate
 from app.services.interview_service import InterviewService
 from app.services.speech_service import speech_service
 from app.services.emotion_service import emotion_service
-from app.utils.security import decode_access_token
 from app.api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
 # 音频文件保留时间（秒），1小时
 AUDIO_FILE_MAX_AGE = 3600
+
+# 持久化音频存储目录（Sealos DevBox 容器重启后不会丢失）
+PERSISTENT_AUDIO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "audio_files")
+os.makedirs(PERSISTENT_AUDIO_DIR, exist_ok=True)
 
 router = APIRouter(prefix="/api/interview/voice", tags=["语音面试"])
 
@@ -38,17 +40,18 @@ async def startup_event():
 def cleanup_old_audio_files():
     """清理过期的TTS音频文件"""
     try:
-        temp_dir = tempfile.gettempdir()
         now = time.time()
         cleaned = 0
-        for filename in os.listdir(temp_dir):
-            if filename.endswith('.mp3') and filename.startswith('tmp') or filename.startswith('voice_') or filename.startswith('frame_'):
-                filepath = os.path.join(temp_dir, filename)
-                if os.path.isfile(filepath):
-                    file_age = now - os.path.getmtime(filepath)
-                    if file_age > AUDIO_FILE_MAX_AGE:
-                        os.remove(filepath)
-                        cleaned += 1
+        # 清理持久化目录中的过期文件
+        if os.path.exists(PERSISTENT_AUDIO_DIR):
+            for filename in os.listdir(PERSISTENT_AUDIO_DIR):
+                if filename.endswith('.mp3'):
+                    filepath = os.path.join(PERSISTENT_AUDIO_DIR, filename)
+                    if os.path.isfile(filepath):
+                        file_age = now - os.path.getmtime(filepath)
+                        if file_age > AUDIO_FILE_MAX_AGE:
+                            os.remove(filepath)
+                            cleaned += 1
         if cleaned > 0:
             logger.info(f"清理了 {cleaned} 个过期音频文件")
     except Exception as e:
@@ -86,8 +89,7 @@ class VoiceInterviewSession:
         try:
             # 生成唯一文件名
             audio_id = str(uuid.uuid4())
-            temp_dir = tempfile.gettempdir()
-            audio_path = os.path.join(temp_dir, f"{audio_id}.mp3")
+            audio_path = os.path.join(PERSISTENT_AUDIO_DIR, f"{audio_id}.mp3")
 
             # 生成TTS音频
             await speech_service.text_to_speech(text, audio_path)
@@ -285,8 +287,9 @@ async def voice_session(
 @router.post("/upload/{interview_id}")
 async def upload_voice(
     interview_id: str,
-    file: UploadFile = File(...),
-    token: str = Depends(decode_access_token),
+    file: Optional[UploadFile] = File(None),
+    audio: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     上传语音文件并处理
@@ -294,19 +297,46 @@ async def upload_voice(
     客户端录音结束后调用此API，
     服务端完成STT->LLM->TTS流程后，返回结果给客户端
     """
-    user_id = token.get("sub")
+    user_id = current_user.get("sub")
+
+    # 兼容不同客户端上传字段名（file / audio）
+    upload_file = file or audio
+    if not upload_file:
+        raise HTTPException(status_code=422, detail="缺少音频文件字段 file 或 audio")
 
     # 验证面试
     interview = InterviewService.get_interview(interview_id)
     if not interview or interview.user_id != user_id:
         raise HTTPException(status_code=404, detail="面试不存在")
 
-    # 保存上传的音频
-    suffix = ".mp3" if file.filename and file.filename.endswith(".mp3") else ".wav"
-    temp_path = os.path.join(tempfile.gettempdir(), f"voice_{uuid.uuid4()}{suffix}")
+    # 保存上传的音频（使用持久化目录）
+    # 小程序常见格式: m4a/aac/mp3/wav，尽量保留真实后缀避免解码失败
+    filename = (upload_file.filename or "").strip()
+    lower_filename = filename.lower()
+    content_type = (upload_file.content_type or "").lower()
+
+    suffix = ".wav"
+    for ext in [".m4a", ".aac", ".mp3", ".wav", ".webm", ".ogg"]:
+        if lower_filename.endswith(ext):
+            suffix = ext
+            break
+
+    if content_type and suffix == ".wav":
+        if "mp4" in content_type or "m4a" in content_type:
+            suffix = ".m4a"
+        elif "aac" in content_type:
+            suffix = ".aac"
+        elif "mpeg" in content_type or "mp3" in content_type:
+            suffix = ".mp3"
+        elif "ogg" in content_type:
+            suffix = ".ogg"
+        elif "webm" in content_type:
+            suffix = ".webm"
+
+    temp_path = os.path.join(PERSISTENT_AUDIO_DIR, f"voice_{uuid.uuid4()}{suffix}")
 
     with open(temp_path, "wb") as f:
-        content = await file.read()
+        content = await upload_file.read()
         f.write(content)
 
     try:
@@ -362,8 +392,8 @@ async def analyze_emotion(
     客户端定时截图调用此API，
     返回紧张度等情绪分析结果，并记录到面试记录
     """
-    # 保存上传的图片
-    temp_path = os.path.join(tempfile.gettempdir(), f"frame_{uuid.uuid4()}.jpg")
+    # 保存上传的图片（使用持久化目录）
+    temp_path = os.path.join(PERSISTENT_AUDIO_DIR, f"frame_{uuid.uuid4()}.jpg")
 
     try:
         content = await file.read()
@@ -407,7 +437,9 @@ async def get_audio(audio_id: str):
     """
     获取TTS生成的音频文件
     """
-    audio_path = os.path.join(tempfile.gettempdir(), f"{audio_id}.mp3")
+    # 使用与 speech_service 相同的持久化存储目录
+    audio_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "audio_files")
+    audio_path = os.path.join(audio_dir, f"{audio_id}.mp3")
     if not os.path.exists(audio_path):
         raise HTTPException(status_code=404, detail="音频不存在")
 
@@ -451,8 +483,7 @@ async def start_voice_interview(
     opening_audio_url = ""
     if first_question.get("opening"):
         audio_id = str(uuid.uuid4())
-        temp_dir = tempfile.gettempdir()
-        audio_path = os.path.join(temp_dir, f"{audio_id}.mp3")
+        audio_path = os.path.join(PERSISTENT_AUDIO_DIR, f"{audio_id}.mp3")
         await speech_service.text_to_speech(first_question["opening"], audio_path)
         opening_audio_url = f"/api/interview/voice/audio/{audio_id}"
 
@@ -460,8 +491,7 @@ async def start_voice_interview(
     question_audio_url = ""
     if first_question.get("question"):
         audio_id = str(uuid.uuid4())
-        temp_dir = tempfile.gettempdir()
-        audio_path = os.path.join(temp_dir, f"{audio_id}.mp3")
+        audio_path = os.path.join(PERSISTENT_AUDIO_DIR, f"{audio_id}.mp3")
         await speech_service.text_to_speech(first_question["question"], audio_path)
         question_audio_url = f"/api/interview/voice/audio/{audio_id}"
 
@@ -518,8 +548,7 @@ async def get_next_voice_question(
     question_audio_url = ""
     if result.get("question"):
         audio_id = str(uuid.uuid4())
-        temp_dir = tempfile.gettempdir()
-        audio_path = os.path.join(temp_dir, f"{audio_id}.mp3")
+        audio_path = os.path.join(PERSISTENT_AUDIO_DIR, f"{audio_id}.mp3")
         await speech_service.text_to_speech(result["question"], audio_path)
         question_audio_url = f"/api/interview/voice/audio/{audio_id}"
 

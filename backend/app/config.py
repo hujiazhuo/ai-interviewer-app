@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-chat"
 
+    # Hugging Face配置
+    HUGGINGFACE_ENDPOINT: str = "https://hf-mirror.com"
+    HUGGINGFACE_EMBEDDING_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    HUGGINGFACE_MODEL_LOCAL_DIR: str = "./models/paraphrase-multilingual-MiniLM-L12-v2"
+    HUGGINGFACE_HUB_CACHE_DIR: str = "./models/hub"
+    HUGGINGFACE_LOCAL_ONLY: bool = False
+
     # JWT配置
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"

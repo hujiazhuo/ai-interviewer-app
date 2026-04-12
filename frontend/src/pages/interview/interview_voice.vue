@@ -1,7 +1,17 @@
 <template>
   <view class="interview-container">
+    <!-- 开始面试按钮（满足移动端自动播放策略） -->
+    <view class="start-overlay" v-if="!interviewStarted">
+      <view class="start-card">
+        <text class="start-title">🎤 AI语音面试</text>
+        <text class="start-desc">{{ positionName }}</text>
+        <text class="start-tip">请确保麦克风和摄像头已授权</text>
+        <button class="start-btn" @click="startInterview">开始面试</button>
+      </view>
+    </view>
+
     <!-- 顶部进度 -->
-    <view class="progress-bar">
+    <view class="progress-bar" v-if="interviewStarted">
       <view class="progress-info">
         <text class="position-name">{{ positionName }} 🔊</text>
         <text class="progress-text">第 {{ currentQuestion }} / 10 题</text>
@@ -24,7 +34,12 @@
         </view>
       </view>
       <view class="camera-preview">
+        <!-- 拍照时短暂隐藏摄像头，用emoji占位避免闪屏感知 -->
+        <view v-if="isCapturingEmotion" class="camera-placeholder">
+          <text style="font-size: 60rpx;">📷</text>
+        </view>
         <camera
+          v-if="showCamera && !isCapturingEmotion"
           device-position="front"
           resolution="low"
           frame-size="low"
@@ -156,6 +171,9 @@
 <script>
 import { api } from '@/common/api.js'
 
+// 使用 api.js 中的 BASE_URL
+const BASE_URL = 'https://ghphowliwsey.sealoshzh.site'
+
 export default {
   data() {
     return {
@@ -179,6 +197,7 @@ export default {
         nervousness: 0
       },
       nervousnessHistory: [],
+      pendingOpeningAudio: '',
       pendingQuestionAudio: '',
       isRecording: false,
       recordingDuration: 0,
@@ -189,7 +208,11 @@ export default {
       emotionTimer: null,
       audioContext: null,
       currentPlayingUrl: '',
-      answerText: ''
+      answerText: '',
+      showCamera: true,  // 显示摄像头用于表情分析
+      isCapturingEmotion: false,  // 正在捕获表情中，用于隐藏摄像头避免闪屏
+      interviewStarted: false,  // 面试是否已开始（用户点击开始按钮后）
+      cameraInitialized: false  // 防止摄像头重复初始化
     }
   },
 
@@ -200,8 +223,8 @@ export default {
     const firstQuestion = decodeURIComponent(options.firstQuestion || '')
     const firstQuestionId = options.questionId || ''
     const firstIsPersonalized = options.isPersonalized === 'true'
-    const openingAudioUrl = options.openingAudioUrl || ''
-    const questionAudioUrl = options.questionAudioUrl || ''
+    const openingAudioUrl = decodeURIComponent(options.openingAudioUrl || '')
+    const questionAudioUrl = decodeURIComponent(options.questionAudioUrl || '')
 
     if (firstQuestion) {
       this.messages.push({
@@ -224,23 +247,12 @@ export default {
     }
     this.positionName = positionNames[position] || position
 
+    // 保存音频URL，等用户点击开始后再播放
+    this.pendingOpeningAudio = openingAudioUrl ? BASE_URL + openingAudioUrl : ''
+    this.pendingQuestionAudio = questionAudioUrl ? BASE_URL + questionAudioUrl : ''
+
     this.initRecorder()
     this.initAudio()
-
-    setTimeout(() => {
-      this.openingShown = true
-      this.scrollToBottom()
-
-      // 自动播放开场白音频
-      if (openingAudioUrl) {
-        const audioId = openingAudioUrl.split('/').pop()
-        this.playAudio(api.getVoiceAudio(audioId))
-      }
-      // 保存题目音频，等开场白播完后再播
-      if (questionAudioUrl) {
-        this.pendingQuestionAudio = api.getVoiceAudio(questionAudioUrl.split('/').pop())
-      }
-    }, 500)
   },
 
   onUnload() {
@@ -259,15 +271,29 @@ export default {
   },
 
   methods: {
+    // 开始面试（用户点击按钮后调用，满足移动端自动播放策略）
+    startInterview() {
+      this.interviewStarted = true
+
+      // 显示开场白
+      this.$nextTick(() => {
+        this.openingShown = true
+        this.scrollToBottom()
+
+        // 播放开场白音频
+        if (this.pendingOpeningAudio) {
+          this.playAudio(this.pendingOpeningAudio)
+        }
+      })
+    },
+
     initRecorder() {
       try {
         this.recorderManager = uni.getRecorderManager()
 
         this.recorderManager.onStop((res) => {
-          if (this.isRecording) {
-            this.isRecording = false
-            this.uploadAudio(res.tempFilePath)
-          }
+          this.isRecording = false
+          this.uploadAudio(res.tempFilePath)
         })
 
         this.recorderManager.onError((err) => {
@@ -302,12 +328,77 @@ export default {
     },
 
     onCameraInit() {
+      // 防止重复初始化
+      if (this.cameraInitialized) {
+        console.log('摄像头已初始化，跳过')
+        return
+      }
+      this.cameraInitialized = true
+      console.log('摄像头初始化完成，10秒/次')
+
       try {
         this.cameraContext = uni.createCameraContext()
-        this.startEmotionAnalysis()
+        this.cameraContext.start()
+
+        // 使用 setInterval 定时捕获，每10秒一次
+        this.emotionTimer = setInterval(() => {
+          console.log('定时捕获表情:', new Date().toLocaleTimeString())
+          this.captureAndAnalyzeEmotion()
+        }, 10000)
+
+        // 首次捕获：延迟3秒后执行（让页面先稳定）
+        setTimeout(() => {
+          console.log('首次捕获表情:', new Date().toLocaleTimeString())
+          this.captureAndAnalyzeEmotion()
+        }, 3000)
       } catch (e) {
         console.warn('摄像头功能初始化失败:', e)
       }
+    },
+
+    captureAndAnalyzeEmotion() {
+      if (!this.cameraContext || this.isCapturingEmotion) return
+
+      // 先隐藏摄像头，避免闪屏
+      this.isCapturingEmotion = true
+
+      // 短暂延迟后再拍照（让摄像头先隐藏）
+      setTimeout(() => {
+        this.cameraContext.takePhoto({
+          quality: 'low',
+          success: (res) => {
+            this.analyzeEmotionImage(res.tempImagePath)
+          },
+          complete: () => {
+            // 恢复显示摄像头
+            setTimeout(() => {
+              this.isCapturingEmotion = false
+            }, 100)
+          }
+        })
+      }, 50)
+    },
+
+    analyzeEmotionImage(tempFilePath) {
+      api.analyzeEmotion(tempFilePath, this.interviewId)
+        .then(result => {
+          if (result.success) {
+            this.currentEmotion = {
+              emoji: result.emoji || '🙂',
+              level: result.level || '未知',
+              nervousness: result.nervousness || 0
+            }
+            if (result.nervousness !== undefined) {
+              this.nervousnessHistory.push({
+                nervousness: result.nervousness,
+                timestamp: new Date().toISOString()
+              })
+            }
+          }
+        })
+        .catch(e => {
+          console.error('表情分析失败:', e)
+        })
     },
 
     toggleRecording() {
@@ -401,6 +492,9 @@ export default {
           }
         } else if (res.user_text) {
           this.addUserText(res.user_text)
+        } else {
+          // success=false 且没有 user_text，显示错误信息
+          uni.showToast({ title: res.error || '处理失败', icon: 'none' })
         }
       } catch (e) {
         console.error('上传音频失败:', e)
@@ -468,8 +562,7 @@ export default {
           // 自动播放问题音频
           if (res.question_audio_url) {
             setTimeout(() => {
-              const audioId = res.question_audio_url.split('/').pop()
-              this.playAudio(api.getVoiceAudio(audioId))
+              this.playAudio(BASE_URL + res.question_audio_url)
             }, 500)
           }
         } else if (res.is_finished) {
@@ -483,33 +576,47 @@ export default {
     },
 
     async endInterview() {
+      const that = this
+
+      // 如果已经显示结果，不重复调用
+      if (that.showResult) {
+        return
+      }
+
       try {
-        const res = await api.endInterview(this.interviewId)
+        const res = await api.endInterview(that.interviewId)
         if (res.success) {
-          this.finalScore = res.total_score || 0
-          this.dimensionScores = res.dimension_scores || {}
-          this.showResult = true
+          that.finalScore = res.total_score || 0
+          that.dimensionScores = res.dimension_scores || {}
+          that.showResult = true
+          that.isFinished = true
         }
       } catch (e) {
         console.error('结束面试失败:', e)
+        // 如果出错了，也尝试显示结果
+        that.showResult = true
+        that.isFinished = true
       }
     },
 
     confirmEndInterview() {
+      const that = this
       uni.showModal({
         title: '确认结束面试',
         content: '你确定要退出此次面试吗？面试结果将会保存。',
         confirmText: '确定结束',
         cancelText: '继续面试',
-        success: async (res) => {
+        success: function(res) {
           if (res.confirm) {
-            await this.endInterview()
+            that.endInterview()
           }
         }
       })
     },
 
     goBack() {
+      // 通知首页刷新面试记录
+      uni.$emit('refreshInterviewHistory')
       uni.navigateBack()
     },
 
@@ -548,40 +655,6 @@ export default {
       this.audioContext.src = url
       this.audioContext.play()
       this.currentPlayingUrl = url
-    },
-
-    startEmotionAnalysis() {
-      if (!this.cameraContext) return
-
-      this.emotionTimer = setInterval(async () => {
-        try {
-          this.cameraContext.takePhoto({
-            quality: 'low',
-            success: async (res) => {
-              try {
-                const result = await api.analyzeEmotion(res.tempImagePath, this.interviewId)
-                if (result.success) {
-                  this.currentEmotion = {
-                    emoji: result.emoji || '🙂',
-                    level: result.level || '未知',
-                    nervousness: result.nervousness || 0
-                  }
-                  if (result.nervousness !== undefined) {
-                    this.nervousnessHistory.push({
-                      nervousness: result.nervousness,
-                      timestamp: new Date().toISOString()
-                    })
-                  }
-                }
-              } catch (e) {
-                console.error('表情分析失败:', e)
-              }
-            }
-          })
-        } catch (e) {
-          console.error('截图失败:', e)
-        }
-      }, 3000)
     }
   }
 }
@@ -642,6 +715,63 @@ export default {
   transition: width 0.3s;
 }
 
+.start-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.start-card {
+  background: white;
+  border-radius: 32rpx;
+  padding: 60rpx 50rpx;
+  width: 80%;
+  max-width: 600rpx;
+  text-align: center;
+  box-shadow: 0 20rpx 60rpx rgba(0,0,0,0.3);
+}
+
+.start-title {
+  font-size: 48rpx;
+  font-weight: bold;
+  color: #333;
+  display: block;
+  margin-bottom: 16rpx;
+}
+
+.start-desc {
+  font-size: 32rpx;
+  color: #667eea;
+  display: block;
+  margin-bottom: 20rpx;
+}
+
+.start-tip {
+  font-size: 24rpx;
+  color: #999;
+  display: block;
+  margin-bottom: 40rpx;
+}
+
+.start-btn {
+  width: 100%;
+  height: 100rpx;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50rpx;
+  color: white;
+  font-size: 36rpx;
+  font-weight: 500;
+  border: none;
+  box-shadow: 0 10rpx 30rpx rgba(102, 126, 234, 0.4);
+}
+
 .emotion-section {
   background: white;
   padding: 20rpx 30rpx;
@@ -682,10 +812,20 @@ export default {
   overflow: hidden;
 }
 
+.camera-placeholder {
+  width: 120rpx;
+  height: 120rpx;
+  border-radius: 16rpx;
+  background: #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .message-list {
   flex: 1;
   padding: 20rpx 30rpx;
-  padding-bottom: 200rpx;
+  padding-bottom: 450rpx;
 }
 
 .message-item {

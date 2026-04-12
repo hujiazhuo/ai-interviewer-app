@@ -513,17 +513,21 @@ class InterviewService:
         )
 
         # 保存评分记录
-        scores = get_collection("scores")
-        scores.insert_one({
-            "user_id": user_id,
-            "interview_id": interview_id,
-            "position": interview.position,
-            "total_score": total_score,
-            "dimension_scores": dimension_scores,
-            "nervousness_penalty": nervousness_penalty,
-            "avg_nervousness": avg_nervousness,
-            "created_at": datetime.utcnow(),
-        })
+        try:
+            scores = get_collection("scores")
+            scores.insert_one({
+                "user_id": user_id,
+                "interview_id": interview_id,
+                "position": interview.position,
+                "total_score": total_score,
+                "dimension_scores": dimension_scores,
+                "nervousness_penalty": nervousness_penalty,
+                "avg_nervousness": avg_nervousness,
+                "created_at": datetime.utcnow(),
+            })
+            logger.info(f"面试评分已保存: interview_id={interview_id}, user_id={user_id}, total_score={total_score}")
+        except Exception as e:
+            logger.error(f"保存评分记录失败: {e}", exc_info=True)
 
         # 知识库自进化 - 检查是否有新问题需要添加
         InterviewService._knowledge_base_evolution(interview)

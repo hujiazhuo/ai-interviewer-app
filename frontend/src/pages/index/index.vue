@@ -309,6 +309,11 @@ onMounted(() => {
   }
 
   loadRecentInterviews()
+
+  // 监听从面试页面返回时的刷新事件
+  uni.$on('refreshInterviewHistory', () => {
+    loadRecentInterviews()
+  })
 })
 </script>
 

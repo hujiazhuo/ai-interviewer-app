@@ -178,7 +178,7 @@ export const api = {
   getScoreHistory: (position) => request({
     url: '/api/score/history',
     method: 'GET',
-    data: { position }
+    data: position ? { position } : {}
   }),
 
   getRadarData: () => request({
